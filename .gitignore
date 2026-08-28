@@ -6,10 +6,19 @@ edge/active_region
 run/*
 !run/.gitkeep
 
-# Log/evidence sinh vien tu tao trong luc chay drill
+# Log/evidence: MAC DINH bo qua rac, NHUNG cac file bang chung
+# duoi day BAT BUOC phai commit de cham diem (xem RUBRIC.md).
 reports/*.jsonl
 reports/*.json
-chaos/chaos-events.jsonl
+!reports/drill-1-nodr.jsonl
+!reports/drill-2-withdr.jsonl
+!reports/failover-events.jsonl
+!reports/health-events.jsonl
+!reports/replication.jsonl
+
+# File tam do test/thu nghiem sinh ra (khong phai bang chung)
+reports/_*.jsonl
+reports/runbook-run.jsonl
 
 # Python
 __pycache__/
