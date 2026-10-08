@@ -1,77 +1,79 @@
-# Day 23 — Disaster Recovery & High Availability for AI Infrastructure
+# Day 23 — Disaster Recovery & High Availability cho hạ tầng AI
 
-**Lab format:** 2 hours · **Environment:** fully local, no cloud account required · **Core idea:** kill your own region first, then learn to survive it.
+**Hình thức:** 2 giờ · **Môi trường:** chạy hoàn toàn trên máy cá nhân, không cần tài khoản cloud · **Ý tưởng cốt lõi:** tự làm sập region của mình trước, rồi học cách vượt qua sự cố đó.
 
-> RTO/RPO are numbers you *measure* from logs — not numbers you read off a slide.
+> RTO/RPO là những con số bạn **đo được từ log**, không phải con số đọc từ slide.
 
 ---
 
-## Overview
+## Tổng quan
 
-This lab simulates a two-region AI serving deployment entirely on your own machine:
+Lab mô phỏng một hệ thống AI serving hai region ngay trên máy của bạn:
 
-| Component | Real-world equivalent | Local stand-in |
+| Thành phần | Tương đương thực tế | Cách mô phỏng trong lab |
 |---|---|---|
-| Region A / Region B | AWS us-east-1 / us-west-2 | Two FastAPI processes on different ports |
-| Vector DB | Pinecone / Weaviate / Qdrant | SQLite file per region |
-| Model weight replication | S3 Cross-Region Replication | Filesystem snapshot (`state/_replica/`) |
-| DNS / Global Load Balancer | Route53 health-check failover | A local proxy reading a `edge/active_region` pointer file |
-| Region outage | Network partition / AZ failure | `chaos/kill_region.py` (`SIGSTOP` or `SIGKILL`) |
+| Region A / Region B | AWS us-east-1 / us-west-2 | Hai tiến trình FastAPI chạy ở hai cổng khác nhau |
+| Vector DB | Pinecone / Weaviate / Qdrant | Một file SQLite cho mỗi region |
+| Replication model weights | S3 Cross-Region Replication | Snapshot trên filesystem (`state/_replica/`) |
+| DNS / Global Load Balancer | Failover theo health check của Route53 | Một proxy cục bộ đọc file con trỏ `edge/active_region` |
+| Region outage | Network partition / sự cố AZ | `chaos/kill_region.py` (`SIGSTOP` hoặc `SIGKILL`) |
 
-You will bring the stack up, watch it serve traffic normally, **kill Region A while it is live**, and measure — with real timestamps, not intuition — how long it takes users to notice and how long it takes to recover. Then you build the health check, failover, and runbook automation that turns "no recovery" into a measured, passing RTO.
+Các bước chính: khởi động hệ thống, quan sát hệ thống phục vụ bình thường, **tắt Region A khi đang có traffic**, rồi đo bằng timestamp thật (không dựa vào cảm giác) mất bao lâu để người dùng nhận ra sự cố và bao lâu để hệ thống hồi phục. Sau đó bạn tự xây dựng health check, quy trình failover và runbook tự động hoá, để chuyển từ trạng thái "không có khả năng hồi phục" sang một chỉ số RTO đo được và đạt yêu cầu.
 
-No AWS account, no cloud spend, no Docker required for the graded path.
+Bài lab không cần tài khoản AWS, không phát sinh chi phí cloud, và đường chấm điểm không yêu cầu Docker.
 
-## Quick Start
+## Bắt đầu nhanh
 
 ```bash
 pip install -r requirements.txt
-make seed              # seed Region A (200 docs + weights), Region B empty
+make seed              # seed Region A (200 tài liệu + weights), Region B để trống
 bash scripts/up_bare.sh
 curl localhost:8080/v1/infer
 ```
 
-Expected response: `"edge_region":"a"` and an answer starting with `"[a] ..."`.
+Kết quả mong đợi: `"edge_region":"a"` và câu trả lời bắt đầu bằng `"[a] ..."`.
 
-Stop everything:
+Dừng toàn bộ hệ thống:
 
 ```bash
 bash scripts/down_bare.sh
 ```
 
-> **Docker mode** (optional, `docker compose up -d`) works for local exploration, but is **not** used for the graded drill — timing is not reproducible across machines. Every drill in [GUIDE.md](GUIDE.md) runs in bare mode with `--mock`.
+> **Chế độ Docker** (tuỳ chọn, `docker compose up -d`) dùng được để tìm hiểu thêm, nhưng **không** dùng cho bài diễn tập (drill) được chấm điểm, vì thời gian đo trên các máy khác nhau không tái lập được. Mọi drill trong [GUIDE.md](GUIDE.md) đều chạy ở chế độ bare với cờ `--mock`.
 
-## Repository Structure
+## Cấu trúc thư mục
 
 ```
-serving/    Mock inference API per region (FastAPI). Readiness depends on pool state,
-            model weights on disk, and vector count — not just "process is alive".
-edge/       DNS/load-balancer stand-in. Routes by reading edge/active_region,
-            cached for EDGE_TTL_SECONDS to simulate real DNS cache behavior.
-state/      Seed, ingest, snapshot/restore, and replication for the vector DB
-            and model weights.
-chaos/      kill_region.py — induces `stop` (SIGKILL) or `netblock` (SIGSTOP)
-            failure, with a --mock flag for reproducible grading.
-loadgen/    traffic.py — continuous request generator. This is the RTO clock:
-            every request is one timestamped line in a JSONL log.
-dr/         ★ YOUR ASSIGNMENT — three skeletons to implement:
+serving/    API inference giả lập cho mỗi region (FastAPI). Trạng thái ready phụ thuộc vào
+            pool state, model weights trên đĩa và số lượng vector — không chỉ là
+            "tiến trình còn sống".
+edge/       Thành phần thay thế DNS/load balancer. Định tuyến bằng cách đọc
+            edge/active_region, kết quả được cache trong EDGE_TTL_SECONDS để mô phỏng
+            hành vi cache DNS thực tế.
+state/      Seed, ingest, snapshot/restore và replication cho vector DB và
+            model weights.
+chaos/      kill_region.py — gây lỗi kiểu `stop` (SIGKILL) hoặc `netblock` (SIGSTOP),
+            có cờ --mock để kết quả chấm điểm tái lập được.
+loadgen/    traffic.py — bộ sinh request liên tục. Đây chính là "đồng hồ" đo RTO:
+            mỗi request là một dòng JSONL có timestamp.
+dr/         ★ PHẦN BÀI TẬP CỦA BẠN — ba file khung (skeleton) cần hoàn thiện:
             health_checker.py, failover.py, runbook.py
-tools/      measure_rto.py — computes RTO/RPO from logs and validates the drill.
-tests/      Unit tests for your dr/ code, plus the evidence-gate tests used
-            for grading.
-reports/    Templates you fill in: runbook.md, rto-evidence.md, postmortem.md.
-scripts/    up_bare.sh / down_bare.sh — start/stop the stack without Docker.
+tools/      measure_rto.py — tính RTO/RPO từ log và kiểm tra tính hợp lệ của drill.
+tests/      Unit test cho code trong dr/, cùng các test "evidence gate" dùng để
+            chấm điểm.
+reports/    Các template bạn cần điền: runbook.md, rto-evidence.md, postmortem.md.
+scripts/    up_bare.sh / down_bare.sh — khởi động/dừng hệ thống không cần Docker.
 ```
 
-## Where to Go Next
+## Tài liệu liên quan
 
-| Document | Purpose |
+| Tài liệu | Mục đích |
 |---|---|
-| **[GUIDE.md](GUIDE.md)** | Full 2-hour walkthrough — setup, baseline, attack, containment, proof |
-| **[RUBRIC.md](RUBRIC.md)** | Grading criteria, hard-fail conditions, and exact verification commands |
+| **[GUIDE.md](GUIDE.md)** | Hướng dẫn chi tiết 2 giờ — chuẩn bị, baseline, tấn công, khắc phục, chứng minh |
+| **[RUBRIC.md](RUBRIC.md)** | Tiêu chí chấm điểm, điều kiện trượt cứng và lệnh kiểm tra cụ thể |
 
-## Safety Notes
+## Lưu ý an toàn
 
-- Every target in this lab is `127.0.0.1` / `localhost`. Do not repoint `URL`, `UPSTREAM`, or the load generator at any external host.
-- `--mock` mode only sends process signals (`SIGSTOP`/`SIGKILL`) and touches local files — nothing here reaches a real cloud region.
-- The chaos script refuses to kill a region if the other one is already down, to prevent an accidental double outage. Overriding this (`--i-really-want-both`) marks the drill invalid for grading.
+- Mọi mục tiêu trong lab đều là `127.0.0.1` / `localhost`. Không trỏ `URL`, `UPSTREAM` hoặc load generator tới bất kỳ máy chủ bên ngoài nào.
+- Chế độ `--mock` chỉ gửi tín hiệu tiến trình (`SIGSTOP`/`SIGKILL`) và thao tác trên file cục bộ — không có tác động nào lên một cloud region thật.
+- Script chaos từ chối tắt một region nếu region còn lại đã ngừng hoạt động, nhằm tránh vô tình gây sự cố kép (double outage). Nếu ép bỏ qua bằng `--i-really-want-both`, drill sẽ bị đánh dấu không hợp lệ khi chấm điểm.
